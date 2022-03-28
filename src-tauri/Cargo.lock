@@ -53,6 +53,9 @@ checksum = "4361135be9122e0870de935d7c439aef945b9f9ddd4199a553b5270b49c82a27"
 name = "app"
 version = "0.1.0"
 dependencies = [
+ "cocoa",
+ "objc",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "tauri",
@@ -3929,7 +3932,7 @@ dependencies = [
 [[package]]
 name = "wgpu"
 version = "0.12.0"
-source = "git+https://github.com/dceddia/wgpu?branch=nsview-surface#c4491a646dc08acb61271ca7d3b64a9473bc92e2"
+source = "git+https://github.com/dceddia/wgpu?branch=master#b52d68d5adc3392d3157edcb33f1d5e8470a449a"
 dependencies = [
  "arrayvec",
  "js-sys",
@@ -3949,7 +3952,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "0.12.0"
-source = "git+https://github.com/dceddia/wgpu?branch=nsview-surface#c4491a646dc08acb61271ca7d3b64a9473bc92e2"
+source = "git+https://github.com/dceddia/wgpu?branch=master#b52d68d5adc3392d3157edcb33f1d5e8470a449a"
 dependencies = [
  "arrayvec",
  "bitflags",
@@ -3971,7 +3974,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "0.12.0"
-source = "git+https://github.com/dceddia/wgpu?branch=nsview-surface#c4491a646dc08acb61271ca7d3b64a9473bc92e2"
+source = "git+https://github.com/dceddia/wgpu?branch=master#b52d68d5adc3392d3157edcb33f1d5e8470a449a"
 dependencies = [
  "arrayvec",
  "ash",
@@ -4008,7 +4011,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "0.12.0"
-source = "git+https://github.com/dceddia/wgpu?branch=nsview-surface#c4491a646dc08acb61271ca7d3b64a9473bc92e2"
+source = "git+https://github.com/dceddia/wgpu?branch=master#b52d68d5adc3392d3157edcb33f1d5e8470a449a"
 dependencies = [
  "bitflags",
 ]

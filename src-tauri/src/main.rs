@@ -3,9 +3,49 @@
     windows_subsystem = "windows"
 )]
 
-use std::time::Duration;
+use std::{
+    ffi::c_void,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
-use tauri::{Menu, MenuItem, Submenu, Window, WindowEvent};
+use cocoa::{
+    appkit::NSView,
+    base::nil,
+    foundation::{NSPoint, NSRect, NSSize},
+};
+use objc::{msg_send, runtime::Object, sel, sel_impl};
+use raw_window_handle::{AppKitHandle, HasRawWindowHandle};
+use tauri::{Menu, MenuItem, PhysicalSize, Submenu, Window, WindowEvent};
+
+unsafe impl Send for OverlayView {}
+pub struct OverlayView {
+    ns_window: *mut Object,
+    ns_view: *mut Object,
+}
+impl OverlayView {
+    pub fn new(ns_window: *mut Object, ns_view: *mut Object) -> Self {
+        OverlayView { ns_window, ns_view }
+    }
+
+    pub fn set_frame(&mut self, x: f64, y: f64, size: PhysicalSize<u32>) {
+        unsafe {
+            let _: () = msg_send![self.ns_view, setFrameOrigin: NSPoint::new(x, y)];
+            let _: () = msg_send![self.ns_view, setFrameSize: NSSize {
+                width: size.width as f64,
+                height: size.height as f64,
+            }];
+        }
+    }
+}
+unsafe impl HasRawWindowHandle for OverlayView {
+    fn raw_window_handle(&self) -> raw_window_handle::RawWindowHandle {
+        let mut handle = AppKitHandle::empty();
+        handle.ns_window = self.ns_window as *mut c_void;
+        handle.ns_view = self.ns_view as *mut c_void;
+        raw_window_handle::RawWindowHandle::AppKit(handle)
+    }
+}
 
 struct State {
     surface: wgpu::Surface,
@@ -16,13 +56,11 @@ struct State {
 }
 
 impl State {
-    async fn new(window: &Window) -> Self {
-        let size = window.inner_size().unwrap();
-
+    async fn new<W: HasRawWindowHandle>(drawable: &W, size: tauri::PhysicalSize<u32>) -> Self {
         // The instance is a handle to our GPU
         // BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
         let instance = wgpu::Instance::new(wgpu::Backends::all());
-        let surface = unsafe { instance.create_surface(window) };
+        let surface = unsafe { instance.create_surface(drawable) };
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
@@ -115,28 +153,108 @@ impl State {
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
-        println!("rendered");
 
         Ok(())
+    }
+}
+
+pub unsafe fn get_content_view<W: raw_window_handle::HasRawWindowHandle>(
+    window: &W,
+) -> (*mut Object, *mut Object) {
+    match window.raw_window_handle() {
+        #[cfg(target_os = "macos")]
+        raw_window_handle::RawWindowHandle::AppKit(handle) => {
+            let ns_window = handle.ns_window as *mut Object;
+            let ns_view: *mut Object = msg_send![ns_window, contentView];
+            let subviews: *mut Object = msg_send![ns_view, subviews];
+            let webview: *mut Object = msg_send![subviews, firstObject];
+            (ns_view, webview)
+        }
+        _ => unimplemented!("this only works on macos"),
+    }
+}
+pub unsafe fn add_subview<W: raw_window_handle::HasRawWindowHandle>(window: &W) -> OverlayView {
+    // Create an NSView with an NSRect
+    // Add the view as a subview of contentView
+    // Draw on the subview
+    match window.raw_window_handle() {
+        #[cfg(target_os = "macos")]
+        raw_window_handle::RawWindowHandle::AppKit(handle) => {
+            let ns_window = handle.ns_window as *mut Object;
+            let content_view: *mut Object = msg_send![ns_window, contentView];
+
+            // Make a new view
+            let new_view = NSView::alloc(nil).initWithFrame_(NSRect::new(
+                NSPoint::new(100.0, 0.0),
+                NSSize::new(200.0, 200.0),
+            ));
+            new_view.setWantsLayer(true);
+
+            // Add it to the contentView, as a sibling of webview, so that it appears on top
+            let _: c_void = msg_send![content_view, addSubview: new_view];
+
+            // Quick check: How many views?
+            let subviews: *mut Object = msg_send![content_view, subviews];
+            let count: usize = msg_send![subviews, count];
+            println!("contentView now has {} views", count);
+
+            OverlayView::new(ns_window, new_view)
+        }
+        _ => unimplemented!("this only works on macos"),
     }
 }
 
 fn main() {
     tauri::Builder::default()
         .menu(build_menu())
-        .on_page_load(|window, _| {
-            let mut wgpu_state = match tokio::runtime::Runtime::new() {
+        .on_page_load(|window: Window, _| {
+            let video_view = unsafe { add_subview(&window) };
+            let wgpu_state = match tokio::runtime::Runtime::new() {
                 Ok(runtime) => runtime.block_on(async {
                     // load data in separate async thread
                     // workaround for https://github.com/tauri-apps/tauri/issues/2838
-                    return State::new(&window).await;
+                    return State::new(
+                        &video_view,
+                        PhysicalSize {
+                            width: 200,
+                            height: 200,
+                        },
+                    )
+                    .await;
                 }),
                 Err(_) => panic!("error creating runtime"),
             };
 
+            let wgpu_state = Arc::new(Mutex::new(wgpu_state));
+            let video_view = Arc::new(Mutex::new(video_view));
+            let state1 = wgpu_state.clone();
+            window.on_window_event(move |event| match event {
+                WindowEvent::Resized(size) => {
+                    let size = size.to_logical(2.0);
+                    let overlay_width = size.width as f64 * 0.3;
+                    let overlay_height = size.height as f64 * 0.1;
+                    let overlay_x = 100;
+                    let overlay_y = 100;
+                    let x = (size.width as f64 - overlay_width) / 2.0;
+                    let y = overlay_y as f64;
+                    let overlay_size = PhysicalSize {
+                        width: overlay_width as u32,
+                        height: overlay_height as u32,
+                    };
+                    video_view.lock().unwrap().set_frame(x, y, overlay_size);
+                    state1.lock().unwrap().resize(size.into());
+                }
+                _ => {}
+            });
+
+            let state2 = wgpu_state.clone();
             std::thread::spawn(move || loop {
-                wgpu_state.render().expect("render failed");
-                std::thread::sleep(Duration::from_millis(30));
+                // wgpu_state.resize(PhysicalSize {
+                //     width: 200,
+                //     height: 200,
+                // });
+                state2.lock().unwrap().render().expect("render failed");
+                std::thread::sleep(Duration::from_millis(15));
             });
         })
         .run(tauri::generate_context!())

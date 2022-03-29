@@ -3,245 +3,19 @@
     windows_subsystem = "windows"
 )]
 
+mod overlay;
+
 use std::{
-    ffi::c_void,
     sync::{Arc, Mutex},
     time::Duration,
 };
 
+use overlay::OverlayView;
 use raw_window_handle::HasRawWindowHandle;
 use tauri::{
     AppHandle, Manager, Menu, MenuItem, PhysicalPosition, PhysicalSize, Position, Size, Submenu,
-    Window, WindowEvent,
+    WindowEvent,
 };
-
-pub trait OverlayView: HasRawWindowHandle {
-    fn set_parent_position<P: Into<Position>>(&mut self, pos: P);
-    fn set_origin<P: Into<Position>>(&mut self, pos: P);
-    fn set_size<S: Into<Size>>(&mut self, size: S);
-}
-
-unsafe fn add_overlay(handle: &AppHandle) -> impl OverlayView {
-    cfg_if::cfg_if! {
-        if #[cfg(target_os = "macos")] {
-            macos::add_overlay(handle)
-        } else if #[cfg(target_os = "windows")] {
-            windows::add_overlay(handle)
-        }
-    }
-}
-
-#[cfg(macos)]
-pub mod macos {
-    use crate::OverlayView;
-    use cocoa::{
-        appkit::NSView,
-        base::nil,
-        foundation::{NSPoint, NSRect, NSSize},
-    };
-
-    use objc::{msg_send, runtime::Object, sel, sel_impl};
-    use raw_window_handle::{AppKitHandle, HasRawWindowHandle};
-
-    pub struct MacosOverlayView {
-        ns_window: *mut Object,
-        ns_view: *mut Object,
-    }
-
-    unsafe impl Send for MacosOverlayView {}
-    impl MacosOverlayView {
-        fn new(ns_window: *mut Object, ns_view: *mut Object) -> Self {
-            MacosOverlayView { ns_window, ns_view }
-        }
-    }
-    impl OverlayView for MacosOverlayView {
-        fn set_frame(&mut self, x: f64, y: f64, size: PhysicalSize<u32>) {
-            unsafe {
-                let _: () = msg_send![self.ns_view, setFrameOrigin: NSPoint::new(x, y)];
-                let _: () = msg_send![self.ns_view, setFrameSize: NSSize {
-                    width: size.width as f64,
-                    height: size.height as f64,
-                }];
-            }
-        }
-    }
-
-    unsafe impl HasRawWindowHandle for MacosOverlayView {
-        fn raw_window_handle(&self) -> raw_window_handle::RawWindowHandle {
-            let mut handle = AppKitHandle::empty();
-            handle.ns_window = self.ns_window as *mut c_void;
-            handle.ns_view = self.ns_view as *mut c_void;
-            raw_window_handle::RawWindowHandle::AppKit(handle)
-        }
-    }
-
-    pub fn add_overlay(handle: &AppHandle) -> OverlayView {
-        let window = handle
-            .get_window("main")
-            .expect("failed to get main window");
-        if let RawWindowHandle::AppKitHandle(handle) = window.raw_window_handle() {
-            let ns_window = handle.ns_window as *mut Object;
-            let content_view: *mut Object = msg_send![ns_window, contentView];
-
-            // Make a new view
-            let new_view = NSView::alloc(nil).initWithFrame_(NSRect::new(
-                NSPoint::new(100.0, 0.0),
-                NSSize::new(200.0, 200.0),
-            ));
-            new_view.setWantsLayer(true);
-
-            // Add it to the contentView, as a sibling of webview, so that it appears on top
-            let _: c_void = msg_send![content_view, addSubview: new_view];
-
-            // Quick check: How many views?
-            let subviews: *mut Object = msg_send![content_view, subviews];
-            let count: usize = msg_send![subviews, count];
-            println!("contentView now has {} views", count);
-
-            MacosOverlayView::new(ns_window, new_view)
-        } else {
-            unreachable!("only runs on windows")
-        }
-    }
-}
-
-#[cfg(windows)]
-pub mod windows {
-
-    use std::{ffi::c_void, sync::Weak};
-
-    use crate::OverlayView;
-    use raw_window_handle::{HasRawWindowHandle, RawWindowHandle, Win32Handle};
-    use tao::platform::windows::{WindowBuilderExtWindows, WindowExtWindows};
-    use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Position, Size};
-    use windows::Win32::{
-        Foundation::{BOOL, HWND, LPARAM},
-        UI::WindowsAndMessaging::{
-            GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-            WS_EX_TRANSPARENT,
-        },
-    };
-
-    pub struct WindowsOverlayView {
-        overlay: Weak<tao::window::Window>,
-        parent_pos: Position,
-        last_origin: Position,
-        last_size: Size,
-    }
-
-    impl WindowsOverlayView {
-        pub fn new(overlay: Weak<tao::window::Window>) -> Self {
-            WindowsOverlayView {
-                overlay,
-                parent_pos: Position::Physical(PhysicalPosition { x: 0, y: 0 }),
-                last_origin: Position::Physical(PhysicalPosition { x: 0, y: 0 }),
-                last_size: Size::Physical(PhysicalSize {
-                    width: 0,
-                    height: 0,
-                }),
-            }
-        }
-    }
-
-    impl OverlayView for WindowsOverlayView {
-        fn set_parent_position<P: Into<Position>>(&mut self, pos: P) {
-            self.parent_pos = pos.into();
-            self.set_origin(self.last_origin.clone());
-        }
-
-        fn set_origin<P: Into<Position>>(&mut self, pos: P) {
-            if let Some(overlay) = self.overlay.upgrade() {
-                self.last_origin = pos.into();
-
-                // Translate the origin by the parent window position
-                let translated = match (&self.last_origin, &self.parent_pos) {
-                    (Position::Physical(origin), Position::Physical(parent)) => {
-                        tao::dpi::PhysicalPosition {
-                            x: origin.x + parent.x,
-                            y: origin.y + parent.y,
-                        }
-                    }
-                    _ => unimplemented!("set_origin does not support Logical positions yet"),
-                };
-                overlay.set_outer_position(translated);
-            }
-        }
-
-        fn set_size<S: Into<Size>>(&mut self, size: S) {
-            if let Some(overlay) = self.overlay.upgrade() {
-                match size.into() {
-                    Size::Physical(size) => overlay.set_inner_size(tao::dpi::PhysicalSize {
-                        width: size.width,
-                        height: size.height,
-                    }),
-                    Size::Logical(size) => overlay.set_inner_size(tao::dpi::LogicalSize {
-                        width: size.width,
-                        height: size.height,
-                    }),
-                }
-            }
-        }
-    }
-
-    unsafe impl HasRawWindowHandle for WindowsOverlayView {
-        fn raw_window_handle(&self) -> raw_window_handle::RawWindowHandle {
-            let window = self.overlay.upgrade().expect("window was deallocated?");
-            let mut handle = Win32Handle::empty();
-            handle.hwnd = window.hwnd();
-            handle.hinstance = window.hinstance();
-
-            raw_window_handle::RawWindowHandle::Win32(handle)
-        }
-    }
-
-    pub fn add_overlay(app_handle: &AppHandle) -> impl OverlayView {
-        let window = app_handle
-            .get_window("main")
-            .expect("failed to get main window");
-
-        if let RawWindowHandle::Win32(handle) = window.raw_window_handle() {
-            let hwnd = HWND(window.hwnd().expect("failed to get HWND") as _);
-            let overlay = app_handle
-                .create_tao_window(move || {
-                    let window_builder = tao::window::WindowBuilder::new()
-                        .with_always_on_top(false)
-                        .with_decorations(false)
-                        .with_resizable(false)
-                        .with_visible(true)
-                        .with_position(tao::dpi::LogicalPosition::<u32>::new(30, 30))
-                        .with_owner_window(hwnd)
-                        .with_inner_size(tao::dpi::LogicalSize::<u32>::new(200, 200));
-
-                    ("WGPU Target".to_string(), window_builder)
-                })
-                .expect("failed to create overlay window");
-            make_window_passthrough_events(
-                overlay
-                    .upgrade()
-                    .expect("failed to get Arc<Window>")
-                    .as_ref(),
-            );
-
-            WindowsOverlayView::new(overlay)
-        } else {
-            unreachable!("only runs on windows")
-        }
-    }
-
-    /// Make it so that mouse events pass through the window and it's excluded from tab order
-    fn make_window_passthrough_events(window: &tao::window::Window) {
-        let hwnd = HWND(window.hwnd() as _);
-        unsafe {
-            // Based on https://stackoverflow.com/a/50245502
-            let cur_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-            SetWindowLongW(
-                hwnd,
-                GWL_EXSTYLE,
-                (cur_style | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE) as i32,
-            );
-        }
-    }
-}
 
 struct State {
     surface: wgpu::Surface,
@@ -308,13 +82,6 @@ impl State {
         }
     }
 
-    #[allow(unused_variables)]
-    fn input(&mut self, event: &WindowEvent) -> bool {
-        false
-    }
-
-    fn update(&mut self) {}
-
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -369,7 +136,7 @@ fn main() {
 }
 
 fn add_wgpu_overlay(handle: &AppHandle) {
-    let overlay_view = unsafe { add_overlay(handle) };
+    let overlay_view = unsafe { overlay::add_overlay(handle) };
     let wgpu_state = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime.block_on(async {
             // load data in separate async thread

@@ -22,6 +22,8 @@ wgpu = { git = "https://github.com/dceddia/wgpu", branch = "master" }
 #wgpu = { path = "/Users/dceddia/Projects/wgpu/wgpu" }
 tokio = "1.17.0"
 raw-window-handle = "0.4.2"
+
+[target.'cfg(macos)'.dependencies]
 objc = "0.2.7"
 cocoa = "0.24.0"
 

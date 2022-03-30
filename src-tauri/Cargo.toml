@@ -25,11 +25,11 @@ raw-window-handle = "0.4.2"
 cfg-if = "1.0.0"
 tao = "0.6.4"
 
-[target.'cfg(macos)'.dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2.7"
 cocoa = "0.24.0"
 
-[target.'cfg(windows)'.dependencies]
+[target.'cfg(target_os = "windows")'.dependencies]
 windows = "0.30.0"
 
 [features]

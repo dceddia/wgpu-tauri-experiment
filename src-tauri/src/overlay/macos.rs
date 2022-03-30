@@ -1,3 +1,5 @@
+use std::ffi::c_void;
+
 use crate::OverlayView;
 use cocoa::{
     appkit::NSView,
@@ -6,7 +8,8 @@ use cocoa::{
 };
 
 use objc::{msg_send, runtime::Object, sel, sel_impl};
-use raw_window_handle::{AppKitHandle, HasRawWindowHandle};
+use raw_window_handle::{AppKitHandle, HasRawWindowHandle, RawWindowHandle};
+use tauri::{AppHandle, Manager};
 
 pub struct MacosOverlayView {
     ns_window: *mut Object,
@@ -20,12 +23,30 @@ impl MacosOverlayView {
     }
 }
 impl OverlayView for MacosOverlayView {
-    fn set_frame(&mut self, x: f64, y: f64, size: PhysicalSize<u32>) {
+    fn set_parent_position(&mut self, _: tauri::Position) {
+        // not needed on macOS
+    }
+
+    fn set_origin(&mut self, pos: tauri::Position) {
+        let (x, y) = match pos {
+            tauri::Position::Physical(pos) => (pos.x as f64, pos.y as f64),
+            tauri::Position::Logical(pos) => (pos.x, pos.y),
+        };
         unsafe {
             let _: () = msg_send![self.ns_view, setFrameOrigin: NSPoint::new(x, y)];
+        }
+    }
+
+    fn set_size(&mut self, size: tauri::Size) {
+        let (width, height) = match size {
+            tauri::Size::Physical(size) => (size.width as f64, size.width as f64),
+            tauri::Size::Logical(size) => (size.width, size.width),
+        };
+
+        unsafe {
             let _: () = msg_send![self.ns_view, setFrameSize: NSSize {
-                width: size.width as f64,
-                height: size.height as f64,
+                width,
+                height,
             }];
         }
     }
@@ -40,30 +61,31 @@ unsafe impl HasRawWindowHandle for MacosOverlayView {
     }
 }
 
-pub fn add_overlay(handle: &AppHandle) -> OverlayView {
+pub fn add_overlay(handle: &AppHandle) -> impl OverlayView {
     let window = handle
         .get_window("main")
         .expect("failed to get main window");
-    if let RawWindowHandle::AppKitHandle(handle) = window.raw_window_handle() {
-        let ns_window = handle.ns_window as *mut Object;
-        let content_view: *mut Object = msg_send![ns_window, contentView];
+    if let RawWindowHandle::AppKit(handle) = window.raw_window_handle() {
+        unsafe {
+            let ns_window = handle.ns_window as *mut Object;
+            let content_view: *mut Object = msg_send![ns_window, contentView];
 
-        // Make a new view
-        let new_view = NSView::alloc(nil).initWithFrame_(NSRect::new(
-            NSPoint::new(100.0, 0.0),
-            NSSize::new(200.0, 200.0),
-        ));
-        new_view.setWantsLayer(true);
+            // Make a new view
+            let new_view = NSView::alloc(nil).initWithFrame_(NSRect::new(
+                NSPoint::new(100.0, 0.0),
+                NSSize::new(200.0, 200.0),
+            ));
+            new_view.setWantsLayer(true);
 
-        // Add it to the contentView, as a sibling of webview, so that it appears on top
-        let _: c_void = msg_send![content_view, addSubview: new_view];
+            // Add it to the contentView, as a sibling of webview, so that it appears on top
+            let _: c_void = msg_send![content_view, addSubview: new_view];
 
-        // Quick check: How many views?
-        let subviews: *mut Object = msg_send![content_view, subviews];
-        let count: usize = msg_send![subviews, count];
-        println!("contentView now has {} views", count);
-
-        MacosOverlayView::new(ns_window, new_view)
+            // Quick check: How many views?
+            let subviews: *mut Object = msg_send![content_view, subviews];
+            let count: usize = msg_send![subviews, count];
+            println!("contentView now has {} views", count);
+            MacosOverlayView::new(ns_window, new_view)
+        }
     } else {
         unreachable!("only runs on windows")
     }

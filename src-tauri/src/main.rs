@@ -12,12 +12,13 @@ use std::{
 
 use overlay::OverlayView;
 use raw_window_handle::HasRawWindowHandle;
+use serde::Deserialize;
 use tauri::{
-    AppHandle, Manager, Menu, MenuItem, PhysicalPosition, PhysicalSize, Position, Size, Submenu,
-    WindowEvent,
+    AppHandle, Manager, Menu, MenuItem, PhysicalPosition, PhysicalSize, Position, Size, State,
+    Submenu, WindowEvent,
 };
 
-struct State {
+struct WgpuState {
     surface: wgpu::Surface,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -25,7 +26,7 @@ struct State {
     size: tauri::PhysicalSize<u32>,
 }
 
-impl State {
+impl WgpuState {
     async fn new<W: HasRawWindowHandle>(drawable: &W, size: tauri::PhysicalSize<u32>) -> Self {
         // The instance is a handle to our GPU
         // BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
@@ -121,27 +122,49 @@ impl State {
     }
 }
 
+#[tauri::command]
+fn set_overlay_position(x: f64, y: f64, overlay: State<Overlay>) {
+    println!("mouse moved to {}, {}", x, y);
+    let overlay = overlay.0.lock().unwrap();
+    overlay.as_ref().map(|overlay| {
+        overlay
+            .lock()
+            .unwrap()
+            .set_origin(Position::Physical(PhysicalPosition {
+                x: x as i32,
+                y: y as i32,
+            }));
+    });
+}
+
+struct Overlay(Mutex<Option<Arc<Mutex<dyn OverlayView + Send>>>>);
+
 fn main() {
     let app = tauri::Builder::default()
         .menu(build_menu())
+        .manage(Overlay(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![set_overlay_position])
         .build(tauri::generate_context!())
         .expect("failed to build app");
 
     app.run(|handle, event| match event {
         tauri::RunEvent::Ready => {
-            add_wgpu_overlay(handle);
+            let overlay = add_wgpu_overlay(handle);
+            let state: tauri::State<Overlay> = handle.state();
+            let mut state = state.0.lock().unwrap();
+            *state = Some(overlay);
         }
         _ => {}
     });
 }
 
-fn add_wgpu_overlay(handle: &AppHandle) {
+fn add_wgpu_overlay(handle: &AppHandle) -> Arc<Mutex<dyn OverlayView + Send>> {
     let overlay_view = unsafe { overlay::add_overlay(handle) };
     let wgpu_state = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime.block_on(async {
             // load data in separate async thread
             // workaround for https://github.com/tauri-apps/tauri/issues/2838
-            return State::new(
+            return WgpuState::new(
                 &overlay_view,
                 PhysicalSize {
                     width: 200,
@@ -154,12 +177,14 @@ fn add_wgpu_overlay(handle: &AppHandle) {
     };
 
     let wgpu_state = Arc::new(Mutex::new(wgpu_state));
-    let video_view = Arc::new(Mutex::new(overlay_view));
+    let overlay_view = Arc::new(Mutex::new(overlay_view));
     let state1 = wgpu_state.clone();
     let window = handle.get_window("main").unwrap();
+
+    let local_overlay = overlay_view.clone();
     window.on_window_event(move |event| match event {
         WindowEvent::Moved(pos) => {
-            let mut overlay = video_view.lock().unwrap();
+            let mut overlay = local_overlay.lock().unwrap();
             let pos = Position::Physical(pos.clone());
             overlay.set_parent_position(pos);
         }
@@ -178,7 +203,7 @@ fn add_wgpu_overlay(handle: &AppHandle) {
                 width: overlay_width as u32,
                 height: overlay_height as u32,
             };
-            let mut overlay = video_view.lock().unwrap();
+            let mut overlay = local_overlay.lock().unwrap();
             overlay.set_origin(Position::Physical(PhysicalPosition {
                 x: x as i32,
                 y: y as i32,
@@ -198,6 +223,8 @@ fn add_wgpu_overlay(handle: &AppHandle) {
         state2.lock().unwrap().render().expect("render failed");
         std::thread::sleep(Duration::from_millis(15));
     });
+
+    overlay_view
 }
 
 fn build_menu() -> Menu {

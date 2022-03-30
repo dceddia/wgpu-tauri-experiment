@@ -1,10 +1,20 @@
 <script lang="ts">
 	export let name: string;
+
+	function handleMove(e: MouseEvent) {
+		window.__TAURI_INVOKE__("set_overlay_position", {
+			x: e.clientX,
+			y: e.clientY,
+		});
+	}
 </script>
 
-<main>
-	<h1>Hello {name}!</h1>
-	<p>Visit the <a href="https://svelte.dev/tutorial">Svelte tutorial</a> to learn how to build Svelte apps.</p>
+<main on:mousemove={handleMove}>
+	<h1>Hello {name}!!!!</h1>
+	<p>
+		Visit the <a href="https://svelte.dev/tutorial">Svelte tutorial</a> to learn
+		how to build Svelte apps.
+	</p>
 </main>
 
 <style>

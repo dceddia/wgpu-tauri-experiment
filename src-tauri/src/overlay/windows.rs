@@ -29,14 +29,14 @@ impl WindowsOverlayView {
 }
 
 impl OverlayView for WindowsOverlayView {
-    fn set_parent_position<P: Into<Position>>(&mut self, pos: P) {
-        self.parent_pos = pos.into();
+    fn set_parent_position(&mut self, pos: Position) {
+        self.parent_pos = pos;
         self.set_origin(self.last_origin.clone());
     }
 
-    fn set_origin<P: Into<Position>>(&mut self, pos: P) {
+    fn set_origin(&mut self, pos: Position) {
         if let Some(overlay) = self.overlay.upgrade() {
-            self.last_origin = pos.into();
+            self.last_origin = pos;
 
             // Translate the origin by the parent window position
             let translated = match (&self.last_origin, &self.parent_pos) {
@@ -52,9 +52,9 @@ impl OverlayView for WindowsOverlayView {
         }
     }
 
-    fn set_size<S: Into<Size>>(&mut self, size: S) {
+    fn set_size(&mut self, size: Size) {
         if let Some(overlay) = self.overlay.upgrade() {
-            match size.into() {
+            match size {
                 Size::Physical(size) => overlay.set_inner_size(tao::dpi::PhysicalSize {
                     width: size.width,
                     height: size.height,

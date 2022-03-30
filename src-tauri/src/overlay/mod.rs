@@ -8,9 +8,9 @@ pub mod macos;
 pub mod windows;
 
 pub trait OverlayView: HasRawWindowHandle {
-    fn set_parent_position<P: Into<Position>>(&mut self, pos: P);
-    fn set_origin<P: Into<Position>>(&mut self, pos: P);
-    fn set_size<S: Into<Size>>(&mut self, size: S);
+    fn set_parent_position(&mut self, pos: Position);
+    fn set_origin(&mut self, pos: Position);
+    fn set_size(&mut self, size: Size);
 }
 
 pub unsafe fn add_overlay(handle: &AppHandle) -> impl OverlayView {
